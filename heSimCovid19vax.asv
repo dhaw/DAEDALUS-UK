@@ -473,7 +473,8 @@ if t<472%T_delta_introduced 16th April
 elseif t>548%t_delta_only 1st July
     vxscv1=vx.scv1*vx.deltamod;
 else
-    vxscv1=vx.scv1*vx.deltamod*(1-(t-472)/76)
+    t-5
+    vxscv1
 end
 %}
 

@@ -6,6 +6,9 @@ function f=ukRoadmapMakeXs(Xin)
 Xout=Xin;
 lx=size(Xin,1);%Number of sectors
 
+repCol=[3,1,19,1,2,1,3,5,1,4,3,1,5,4,1,1,2,2,3,1];
+repColSum=[1,cumsum(repCol)+1];
+
 A=zeros(6,11);
 A(1,1)=28;
 A(2,2:4)=[7,21,3];
@@ -41,12 +44,20 @@ z0=(.4:.05:.9)';
 %undoA=A'\(A'*A);
 rng default;%for reproducibility
 options=optimoptions(@fmincon,'UseParallel',true,'MaxFunctionEvaluations',1e4,'MaxIterations',1e4);%,'algorithm','interior-point');
+options1=optimoptions(@lsqlin,'MaxIterations',1e4,'algorithm','active-set');
+options2=optimoptions(@lsqnonlin,'MaxIterations',1e4,'algorithm','trust-region-reflective');%,'algorithm','interior-point');
 %options=optimoptions(@fmincon,'MaxFunctionEvaluations',1e4,'MaxIterations',1e4);%,'GradObj','off','GradConstr','off');
 
-for i=1:lx
-    xpre=Xin(i,12);
+for i=1:length(repCol)
+    numSect=repColSum(i+1)-repColSum(i);
+    xpre=Xin(repColSum(i),12);
+    lb=min([1,Xin(repColSum(i),6:end)])*ones(1,nperiods);
+    ub=max([1,Xin(repColSum(i),:)])*ones(1,nperiods);
     xmax=max(1,xpre);
+    
     fun2=@(z)toConstrain(z,B,xpre,xmax);%y constrained by Jan x
+    fun3=@(z)unconstrained(z,A,b);
+    %z0=xpre*ones(nperiods,1);
     %{
     if xpre==xmax
         z0=xpre*ones(nperiods,1);
@@ -54,20 +65,32 @@ for i=1:lx
         z0=(xpre:(1-xpre)/(nperiods-1):xmax)';
     end
     %}
-    xi=Xin(i,13:18)';
+    xi=Xin(repColSum(i),13:18)';
+    z0=gmres(A'*A,A'*xi);
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     %Solver:
     %xout=fmincon(fun,'x0',z0,'Aeq',A,'beq',xi,'lb',lb,'ub',ub,'nonlcon',fun2);%,'options',options);
-    zout=fmincon(fun,z0,A,xi,[],[],lb,ub,fun2,options);
+    %[zout,~,exitflag]=fmincon(fun,z0,[],[],A,xi,lb,ub,[],options);%nmin constraint fun2
+    %[zout,~,exitflag]=lsqlin(A,xi,[],[],[],[],lb,ub,z0,options1);
+    %[zout,~,exitflag]=lsqlin(A,xi,[],[],[],[],lb,ub,z0,options1);
     %
-    %{
+    %
     rng default;%for reproducibility
+    problem=createOptimProblem('fmincon','x0',z0,'objective',fun,'Aeq',A,'beq',xi,'lb',lb,'ub',ub,'nonlcon',[],'options',options);
+    %problem=createOptimProblem('lsqnonlin','x0',z0,'objective',fun3,'lb',lb,'ub',ub,'options',options2);%"Objective" here is (equality) constraint
+    %gs=GlobalSearch;
+    %[zout,~,exitflag]=run(gs,problem);
+    ms=MultiStart('StartPointsToRun','bounds');%,'Display','iter','MaxTime',3600);
+    rs=RandomStartPointSet('NumStartPoints',3);
+    allpts={rs};
+    [zout,~,exitflag,~,~]=run(ms,problem,allpts);
     
-    problem=createOptimProblem('fmincon','x0',z0,'objective',fun,'Aeq',A,'beq',xi,'lb',lb,'ub',ub,'nonlcon',fun2,'options',options);
-    gs=GlobalSearch;
-    zout=run(gs,problem);
     %}
-    Xout(i,13:18)=B*zout;
+    if exitflag==1
+        Xout(repColSum(i):repColSum(i+1)-1,13:18)=repmat((B*zout)',numSect,1);
+    else
+        Xout(repColSum(i):repColSum(i+1)-1,13:18)=zeros(numSect,6);
+    end
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     %Simpler method:
     %Feb to July or equiv periods
@@ -82,19 +105,32 @@ end
 
 function f=toOptimise(z,B)
 %f=-sum(z);
-%f=max(diff(diff(B*z)));%As close to linear as possible
+%
+%As close to linear as possible
+%f=max(diff(diff(B*z)));
+%
+%Minimise re-closing:
 dy=diff(B*z);
-f=-sum(dy(dy<0));%Minimise re-closing
+f=-sum(dy(dy<0));
 end
 
 function [c,ceq]=toConstrain(z,B,xpre,xmax)
 y=B*z;
+%
+%Monotone increasing:
 %mindiffy=min(diff([xpre;y]));%>0
+%
+%Bounded:
 miny=min(y);%>0 - covered using xpre
 maxy=max(y);%<1
+%
 %c=max([-mindiffy,-miny,maxy-1]);
 c=max([-miny+xpre,maxy-xmax]);
 ceq=[];
+end
+
+function f=unconstrained(z,A,b)
+f=A*z-b;
 end
 
 %{
